@@ -15,8 +15,12 @@ from CriticNetwork import CriticNetwork
 from OU import OU
 import timeit
 from sklearn.preprocessing import normalize
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 OU = OU()       #Ornstein-Uhlenbeck Process
+
+log_file = open('training_log.txt', 'w+')
 
 def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
     BUFFER_SIZE = 100000
@@ -33,7 +37,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
     EXPLORE = 100000.
     episode_count = 2000
-    max_steps = 100000
+    max_steps = 100
     reward = 0
     done = False
     step = 0
@@ -81,6 +85,11 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
         else:
             data_train_y.append(1.)
 
+    # split the train data for validation
+    data_train_x, data_valid_x, data_train_y, data_valid_y = train_test_split(data_train_x,
+                                                                              data_train_y,
+                                                                              test_size=0.2)
+
 
     #Now load the weight
     print("Now we load the weight")
@@ -99,19 +108,27 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
         feed = list(zip(data_train_x, data_train_y))
         random.shuffle(feed)
         data_train_x, data_train_y = zip(*feed)
+        data_train_x = np.array(data_train_x)
+        data_train_y = np.array(data_train_y)
 
         print("Episode : " + str(i) + " Replay Buffer " + str(buff.count()))
         # a feature vector for the current state
         s_t = data_train_x[0]
         total_reward = 0.
+        preds = []
 
         for j in range(max_steps):
             loss = 0 
             epsilon -= 1.0 / EXPLORE
             a_t = np.zeros([1, action_dim])
             noise_t = np.zeros([1, action_dim])
-            
+
             a_t_original = actor.model.predict(s_t.reshape(1, s_t.shape[0]))
+
+            # store the prediction for accuracy measure
+            preds.append(a_t_original[0][0])
+
+            # add OU noise for DDPG training
             noise_t[0][0] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][0], 0.0, 0.5, 0.3)
             a_t[0][0] = a_t_original[0][0] + noise_t[0][0]
 
@@ -157,12 +174,32 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
             total_reward += r_t
             s_t = s_t1
-            if step % 100 == 0:
-                print("Episode", i, "Step", step, "Action_original", a_t_original, "Action_OU", a_t, "Reward", r_t, "Loss", loss)
-        
+
+            if step % 100 == 99:
+                # training accuracy
+                preds_ = np.where(np.array(preds)>=0.5, 1, 0)
+                accuracy = accuracy_score(data_train_y[:j+1], preds_)
+                print("Episode", i, "Step", step, "Action_original", a_t_original, "Action_OU", a_t, "Reward", r_t, "Loss", loss, "Accuracy", accuracy)
+
             step += 1
             if done:
                 break
+
+        # model validation per episode
+        preds_val = []
+        for j in range(data_valid_x.shape[0]):
+            preds_val.append(actor.model.predict(data_valid_x[j].reshape(1, data_valid_x[j].shape[0]))[0][0])
+        preds_val_ = np.where(np.array(preds_val)>=0.5, 1, 0)
+        accuracy_val = accuracy_score(data_valid_y, preds_val_)
+        print("validation accuracy", accuracy_val)
+
+        # episode / total reward / total loss / training accuracy / validation accuracy
+        log_string = str(i) + '\t' + \
+                     str(total_reward) + '\t' +\
+                     str(loss) + '\t' +\
+                     str(accuracy) + '\t' +\
+                     str(accuracy_val) + '\n'
+        log_file.write(log_string)
 
         if np.mod(i, 10) == 0:
             if train_indicator:
