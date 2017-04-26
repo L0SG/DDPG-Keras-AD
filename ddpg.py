@@ -1,4 +1,4 @@
-from gym_torcs import TorcsEnv
+import keras.preprocessing.text as kt
 import numpy as np
 import random
 import argparse
@@ -7,9 +7,8 @@ from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.optimizers import Adam
 import tensorflow as tf
-from keras.engine.training import collect_trainable_weights
 import json
-
+import datamodule
 from ReplayBuffer import ReplayBuffer
 from ActorNetwork import ActorNetwork
 from CriticNetwork import CriticNetwork
@@ -18,7 +17,7 @@ import timeit
 
 OU = OU()       #Ornstein-Uhlenbeck Process
 
-def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
+def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
     BUFFER_SIZE = 100000
     BATCH_SIZE = 32
     GAMMA = 0.99
@@ -26,12 +25,10 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
     LRA = 0.0001    #Learning rate for Actor
     LRC = 0.001     #Lerning rate for Critic
 
-    action_dim = 3  #Steering/Acceleration/Brake
-    state_dim = 29  #of sensors input
+    action_dim = 1  # anomaly
+    state_dim = 41  #input dimension
 
     np.random.seed(1337)
-
-    vision = False
 
     EXPLORE = 100000.
     episode_count = 2000
@@ -53,8 +50,32 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
     critic = CriticNetwork(sess, state_dim, action_dim, BATCH_SIZE, TAU, LRC)
     buff = ReplayBuffer(BUFFER_SIZE)    #Create replay buffer
 
-    # Generate a Torcs environment
-    env = TorcsEnv(vision=vision, throttle=True,gear_change=False)
+    # load NSL-KDD dataset
+    DATA_PATH = '/home/tkdrlf9202/PycharmProjects/DDPG-Keras-AD'
+    data_train, data_test = datamodule.loader_all(DATA_PATH)
+    idx_discrete = [1, 2, 3]
+    idx_continuous = range(len(data_train[0]))
+    idx_continuous = np.delete(idx_continuous, idx_discrete).tolist()
+
+    data_train_cont, data_train_disc, data_train_class = datamodule.preprocess(data_train, idx_continuous, idx_discrete)
+    # generate tokenizer, one per discrete column
+    print('tokenizing discrete features...')
+    tokenizers = [kt.Tokenizer(num_words=1000) for i in xrange(len(idx_discrete))]
+    # tokenize discrete columns
+    data_train_tokenized = datamodule.generate_tokens(tokenizers, data_train_disc)
+    vocab_size = [min(len(tokenizers[i].word_index), tokenizers[i].num_words) for i in xrange(len(idx_discrete))]
+    print('vocab size of discrete features from training set : ' + str(vocab_size))
+
+    data_train_tokenized = np.array(data_train_tokenized, np.float32)
+
+    data_train_x = np.concatenate((data_train_cont, data_train_tokenized), axis=1)
+    data_train_y = []
+    for elem in data_train_class:
+        if elem == 'normal':
+            data_train_y.append(0.)
+        else:
+            data_train_y.append(1.)
+
 
     #Now load the weight
     print("Now we load the weight")
@@ -67,46 +88,40 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
     except:
         print("Cannot find the weight")
 
-    print("TORCS Experiment Start.")
+    print("Experiment Start.")
     for i in range(episode_count):
 
         print("Episode : " + str(i) + " Replay Buffer " + str(buff.count()))
-
-        if np.mod(i, 3) == 0:
-            ob = env.reset(relaunch=True)   #relaunch TORCS every 3 episode because of the memory leak error
-        else:
-            ob = env.reset()
-
-        s_t = np.hstack((ob.angle, ob.track, ob.trackPos, ob.speedX, ob.speedY,  ob.speedZ, ob.wheelSpinVel/100.0, ob.rpm))
-     
+        # a feature vector for the current state
+        s_t = data_train_x[i]
         total_reward = 0.
+
         for j in range(max_steps):
             loss = 0 
             epsilon -= 1.0 / EXPLORE
-            a_t = np.zeros([1,action_dim])
-            noise_t = np.zeros([1,action_dim])
+            a_t = np.zeros([1, action_dim])
+            noise_t = np.zeros([1, action_dim])
             
             a_t_original = actor.model.predict(s_t.reshape(1, s_t.shape[0]))
             noise_t[0][0] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][0],  0.0 , 0.60, 0.30)
-            noise_t[0][1] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][1],  0.5 , 1.00, 0.10)
-            noise_t[0][2] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][2], -0.1 , 1.00, 0.05)
-
-            #The following code do the stochastic brake
-            #if random.random() <= 0.1:
-            #    print("********Now we apply the brake***********")
-            #    noise_t[0][2] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][2],  0.2 , 1.00, 0.10)
-
             a_t[0][0] = a_t_original[0][0] + noise_t[0][0]
-            a_t[0][1] = a_t_original[0][1] + noise_t[0][1]
-            a_t[0][2] = a_t_original[0][2] + noise_t[0][2]
 
-            ob, r_t, done, info = env.step(a_t[0])
+            # define reward as the distance btw anomality and ground truth
+            r_t = 1 - np.linalg.norm(a_t[0][0]-data_train_y[i])
 
-            s_t1 = np.hstack((ob.angle, ob.track, ob.trackPos, ob.speedX, ob.speedY, ob.speedZ, ob.wheelSpinVel/100.0, ob.rpm))
-        
+            # currently the next state is independent from the current action
+            # wrong assumption for RL, but for initial debugging purpose
+            s_t1 = data_train_x[i+1]
+
+            # if the full training set is used, add the done flag
+            if (i+1 == data_train_x.shape[0]):
+                done = 1
+            else:
+                done = 0
+
             buff.add(s_t, a_t[0], r_t, s_t1, done)      #Add replay buffer
             
-            #Do the batch update
+            # Do the batch update
             batch = buff.getBatch(BATCH_SIZE)
             states = np.asarray([e[0] for e in batch])
             actions = np.asarray([e[1] for e in batch])
@@ -123,7 +138,7 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
                 else:
                     y_t[k] = rewards[k] + GAMMA*target_q_values[k]
        
-            if (train_indicator):
+            if train_indicator:
                 loss += critic.model.train_on_batch([states,actions], y_t) 
                 a_for_grad = actor.model.predict(states)
                 grads = critic.gradients(states, a_for_grad)
@@ -140,8 +155,8 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
             if done:
                 break
 
-        if np.mod(i, 3) == 0:
-            if (train_indicator):
+        if np.mod(i, 10) == 0:
+            if train_indicator:
                 print("Now we save model")
                 actor.model.save_weights("actormodel.h5", overwrite=True)
                 with open("actormodel.json", "w") as outfile:
@@ -155,7 +170,6 @@ def playGame(train_indicator=0):    #1 means Train, 0 means simply Run
         print("Total Step: " + str(step))
         print("")
 
-    env.end()  # This is for shutting down TORCS
     print("Finish.")
 
 if __name__ == "__main__":
