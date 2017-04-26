@@ -5,9 +5,10 @@ from keras.models import model_from_json
 from keras.models import Sequential, Model
 from keras.layers import Dense, Flatten, Input, merge, Lambda
 from keras.optimizers import Adam
+from keras.layers.normalization import BatchNormalization
+
 import tensorflow as tf
 import keras.backend as K
-
 HIDDEN1_UNITS = 300
 HIDDEN2_UNITS = 600
 
@@ -44,7 +45,7 @@ class ActorNetwork(object):
 
     def create_actor_network(self, state_size,action_dim):
         print("Now we build the model")
-        S = Input(shape=[state_size])   
+        S = Input(shape=[state_size])
         h0 = Dense(HIDDEN1_UNITS, activation='relu')(S)
         h1 = Dense(HIDDEN2_UNITS, activation='relu')(h0)
         V = Dense(1, activation='sigmoid')(h1)

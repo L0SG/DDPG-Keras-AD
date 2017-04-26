@@ -1,6 +1,7 @@
 import numpy as np
 import math
-from keras.initializers import normal, identity
+from keras.initializers import normal, identity, RandomUniform
+from keras.layers.normalization import BatchNormalization
 from keras.models import model_from_json, load_model
 from keras.models import Sequential
 from keras.layers import Dense, Flatten, Input, Lambda, Activation
@@ -44,14 +45,15 @@ class CriticNetwork(object):
 
     def create_critic_network(self, state_size,action_dim):
         print("Now we build the model")
-        S = Input(shape=[state_size])  
-        A = Input(shape=[action_dim],name='action2')   
+        S = Input(shape=[state_size])
+        A = Input(shape=[action_dim],name='action2')
         w1 = Dense(HIDDEN1_UNITS, activation='relu')(S)
         a1 = Dense(HIDDEN2_UNITS, activation='linear')(A) 
         h1 = Dense(HIDDEN2_UNITS, activation='linear')(w1)
         h2 = add([h1, a1])
         h3 = Dense(HIDDEN2_UNITS, activation='relu')(h2)
-        V = Dense(action_dim,activation='linear')(h3)   
+        V = Dense(action_dim, activation='linear',
+                  kernel_initializer=RandomUniform(-1e-4, 1e-4))(h3)
         model = Model(inputs=[S,A],outputs=V)
         adam = Adam(lr=self.LEARNING_RATE)
         model.compile(loss='mse', optimizer=adam)

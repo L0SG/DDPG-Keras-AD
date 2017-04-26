@@ -14,6 +14,7 @@ from ActorNetwork import ActorNetwork
 from CriticNetwork import CriticNetwork
 from OU import OU
 import timeit
+from sklearn.preprocessing import normalize
 
 OU = OU()       #Ornstein-Uhlenbeck Process
 
@@ -68,7 +69,11 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
     data_train_tokenized = np.array(data_train_tokenized, np.float32)
 
+    # naive concat for tokinized values
+    # needs embedding
     data_train_x = np.concatenate((data_train_cont, data_train_tokenized), axis=1)
+    data_train_x = normalize(data_train_x, axis=0)
+
     data_train_y = []
     for elem in data_train_class:
         if elem == 'normal':
@@ -90,10 +95,14 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
     print("Experiment Start.")
     for i in range(episode_count):
+        # shuffle the dataset
+        feed = list(zip(data_train_x, data_train_y))
+        random.shuffle(feed)
+        data_train_x, data_train_y = zip(*feed)
 
         print("Episode : " + str(i) + " Replay Buffer " + str(buff.count()))
         # a feature vector for the current state
-        s_t = data_train_x[i]
+        s_t = data_train_x[0]
         total_reward = 0.
 
         for j in range(max_steps):
@@ -103,18 +112,18 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
             noise_t = np.zeros([1, action_dim])
             
             a_t_original = actor.model.predict(s_t.reshape(1, s_t.shape[0]))
-            noise_t[0][0] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][0],  0.0 , 0.60, 0.30)
+            noise_t[0][0] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][0], 0.0, 0.5, 0.3)
             a_t[0][0] = a_t_original[0][0] + noise_t[0][0]
 
             # define reward as the distance btw anomality and ground truth
-            r_t = 1 - np.linalg.norm(a_t[0][0]-data_train_y[i])
+            r_t = 1 - abs(a_t[0][0]-data_train_y[j])
 
             # currently the next state is independent from the current action
             # wrong assumption for RL, but for initial debugging purpose
-            s_t1 = data_train_x[i+1]
+            s_t1 = data_train_x[j+1]
 
             # if the full training set is used, add the done flag
-            if (i+1 == data_train_x.shape[0]):
+            if (j + 1 == data_train_x.shape[0]):
                 done = 1
             else:
                 done = 0
@@ -139,7 +148,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
                     y_t[k] = rewards[k] + GAMMA*target_q_values[k]
        
             if train_indicator:
-                loss += critic.model.train_on_batch([states,actions], y_t) 
+                loss += critic.model.train_on_batch([states, actions], y_t)
                 a_for_grad = actor.model.predict(states)
                 grads = critic.gradients(states, a_for_grad)
                 actor.train(states, grads)
@@ -148,8 +157,8 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
             total_reward += r_t
             s_t = s_t1
-        
-            print("Episode", i, "Step", step, "Action", a_t, "Reward", r_t, "Loss", loss)
+            if step % 100 == 0:
+                print("Episode", i, "Step", step, "Action_original", a_t_original, "Action_OU", a_t, "Reward", r_t, "Loss", loss)
         
             step += 1
             if done:
