@@ -18,21 +18,21 @@ from sklearn.preprocessing import normalize
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
+OU = OU()  # Ornstein-Uhlenbeck Process
 
-OU = OU()       #Ornstein-Uhlenbeck Process
+log_file = open('training_log_33persemi.txt', 'w+')
 
-log_file = open('training_log.txt', 'w+')
 
-def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
+def playGame(train_indicator=1):  # 1 means Train, 0 means simply Run
     BUFFER_SIZE = 100000
     BATCH_SIZE = 32
     GAMMA = 0.99
-    TAU = 0.001     #Target Network HyperParameters
-    LRA = 0.0001    #Learning rate for Actor
-    LRC = 0.001     #Lerning rate for Critic
+    TAU = 0.001  # Target Network HyperParameters
+    LRA = 0.0001  # Learning rate for Actor
+    LRC = 0.001  # Lerning rate for Critic
 
     action_dim = 1  # anomaly
-    state_dim = 41  #input dimension
+    state_dim = 41  # input dimension
 
     np.random.seed(1337)
 
@@ -45,7 +45,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
     epsilon = 1
     indicator = 0
 
-    #Tensorflow GPU optimization
+    # Tensorflow GPU optimization
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
@@ -54,7 +54,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
     actor = ActorNetwork(sess, state_dim, action_dim, BATCH_SIZE, TAU, LRA)
     critic = CriticNetwork(sess, state_dim, action_dim, BATCH_SIZE, TAU, LRC)
-    buff = ReplayBuffer(BUFFER_SIZE)    #Create replay buffer
+    buff = ReplayBuffer(BUFFER_SIZE)  # Create replay buffer
 
     # load NSL-KDD dataset
     DATA_PATH = '/home/tkdrlf9202/PycharmProjects/DDPG-Keras-AD'
@@ -76,7 +76,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
     print('vocab size of discrete features from training set : ' + str(vocab_size))
     data_train_tokenized = np.array(data_train_tokenized, np.float32)
 
-    # tokenize the test set based on the training set
+    # tokenize the test set based on the training se
     data_test_tokenized = [tokenizers[i].texts_to_sequences(data_test_disc[:, i]) for i in range(len(idx_discrete))]
     data_test_tokenized = np.array(data_test_tokenized).reshape(data_test_cont.shape[0], -1)
 
@@ -111,9 +111,8 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
     data_train_x, data_valid_x, data_train_y, data_valid_y = train_test_split(data_train_x,
                                                                               data_train_y,
                                                                               test_size=0.2)
-
-
-    #Now load the weight
+    """
+    # Now load the weight
     print("Now we load the weight")
     try:
         actor.model.load_weights("actormodel.h5")
@@ -123,7 +122,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
         print("Weight load successfully")
     except:
         print("Cannot find the weight")
-
+    """
     print("Experiment Start.")
     for i in range(episode_count):
         # shuffle the dataset
@@ -140,7 +139,7 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
         preds = []
 
         for j in range(max_steps):
-            loss = 0 
+            loss = 0
             epsilon -= 1.0 / EXPLORE
             a_t = np.zeros([1, action_dim])
             noise_t = np.zeros([1, action_dim])
@@ -154,12 +153,28 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
             noise_t[0][0] = train_indicator * max(epsilon, 0) * OU.function(a_t_original[0][0], 0.0, 0.5, 0.3)
             a_t[0][0] = a_t_original[0][0] + noise_t[0][0]
 
-            # define reward as the distance btw anomality and ground truth
-            r_t = 1 - abs(a_t[0][0]-data_train_y[j])
+            # full train for the first 10000 step
+            if i == 0:
+                if j >= 9999:
+                    if j % 3 == 0:
+                        r_t = 1 - abs(a_t[0][0] - data_train_y[j])
+                    # use psuedo-label for other steps
+                    else:
+                        r_t = 1 - abs(a_t[0][0] - np.around(a_t[0][0]))
+                else:
+                    r_t = 1 - abs(a_t[0][0] - data_train_y[j])
+            else:
+                # define reward as the distance btw anomality and ground truth
+                # ground truth can be only observed one per 100 steps
+                if j % 3 == 0:
+                    r_t = 1 - abs(a_t[0][0] - data_train_y[j])
+                # use psuedo-label for other steps
+                else:
+                    r_t = 1 - abs(a_t[0][0] - np.around(a_t[0][0]))
 
             # currently the next state is independent from the current action
             # wrong assumption for RL, but for initial debugging purpose
-            s_t1 = data_train_x[j+1]
+            s_t1 = data_train_x[j + 1]
 
             # if the full training set is used, add the done flag
             if (j + 1 == data_train_x.shape[0]):
@@ -167,8 +182,8 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
             else:
                 done = 0
 
-            buff.add(s_t, a_t[0], r_t, s_t1, done)      #Add replay buffer
-            
+            buff.add(s_t, a_t[0], r_t, s_t1, done)  # Add replay buffer
+
             # Do the batch update
             batch = buff.getBatch(BATCH_SIZE)
             states = np.asarray([e[0] for e in batch])
@@ -178,14 +193,14 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
             dones = np.asarray([e[4] for e in batch])
             y_t = np.asarray([e[1] for e in batch])
 
-            target_q_values = critic.target_model.predict([new_states, actor.target_model.predict(new_states)])  
-           
+            target_q_values = critic.target_model.predict([new_states, actor.target_model.predict(new_states)])
+
             for k in range(len(batch)):
                 if dones[k]:
                     y_t[k] = rewards[k]
                 else:
-                    y_t[k] = rewards[k] + GAMMA*target_q_values[k]
-       
+                    y_t[k] = rewards[k] + GAMMA * target_q_values[k]
+
             if train_indicator:
                 loss += critic.model.train_on_batch([states, actions], y_t)
                 a_for_grad = actor.model.predict(states)
@@ -199,9 +214,11 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
 
             if step % 100 == 99:
                 # training accuracy
-                preds_ = np.where(np.array(preds)>=0.5, 1, 0)
-                accuracy = accuracy_score(data_train_y[:j+1], preds_)
-                print("Episode", i, "Step", step, "Action_original", a_t_original, "Action_OU", a_t, "Reward", r_t, "Loss", loss, "Accuracy", accuracy)
+                preds_ = np.where(np.array(preds) >= 0.5, 1, 0)
+                accuracy = accuracy_score(data_train_y[:j + 1], preds_)
+                print(
+                "Episode", i, "Step", step, "Action_original", a_t_original, "Action_OU", a_t, "Reward", r_t, "Loss",
+                loss, "Accuracy", accuracy)
 
             step += 1
             if done:
@@ -211,18 +228,18 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
         preds_val = []
         for j in range(data_valid_x.shape[0]):
             preds_val.append(actor.model.predict(data_valid_x[j].reshape(1, data_valid_x[j].shape[0]))[0][0])
-        preds_val_ = np.where(np.array(preds_val)>=0.5, 1, 0)
+        preds_val_ = np.where(np.array(preds_val) >= 0.5, 1, 0)
         accuracy_val = accuracy_score(data_valid_y, preds_val_)
         print("validation accuracy", accuracy_val)
 
         # episode / total reward / total loss / training accuracy / validation accuracy
         log_string = str(i) + '\t' + \
-                     str(total_reward) + '\t' +\
-                     str(loss) + '\t' +\
-                     str(accuracy) + '\t' +\
+                     str(total_reward) + '\t' + \
+                     str(loss) + '\t' + \
+                     str(accuracy) + '\t' + \
                      str(accuracy_val) + '\n'
         log_file.write(log_string)
-
+        """
         if np.mod(i, 10) == 0:
             if train_indicator:
                 print("Now we save model")
@@ -233,12 +250,13 @@ def playGame(train_indicator=1):    #1 means Train, 0 means simply Run
                 critic.model.save_weights("criticmodel.h5", overwrite=True)
                 with open("criticmodel.json", "w") as outfile:
                     json.dump(critic.model.to_json(), outfile)
-
-        print("TOTAL REWARD @ " + str(i) +"-th Episode  : Reward " + str(total_reward))
+        """
+        print("TOTAL REWARD @ " + str(i) + "-th Episode  : Reward " + str(total_reward))
         print("Total Step: " + str(step))
         print("")
 
     print("Finish.")
+
 
 if __name__ == "__main__":
     playGame()
